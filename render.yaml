@@ -1,11 +1,12 @@
 services:
   - type: web
-    name: chat-openai-playwright
-    runtime: python
+    name: youtube-cookie-api
+    env: python
+    plan: free
     buildCommand: |
       pip install -r requirements.txt
-      python -m playwright install chromium
-    startCommand: python server.py
-    envVars:
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: 0
+      playwright install chromium
+    startCommand: python3 app.py
+    runtime: python
+    autoDeploy: false
+    region: oregon
