@@ -1,112 +1,65 @@
-"""Make some requests to OpenAI's chatbot"""
+from flask import Flask, jsonify
+import asyncio
+import logging
+from pathlib import Path
+from playwright.async_api import async_playwright
 
-import time
-import os
-import flask
+# --- Flask and Logging ---
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-from flask import g
+# --- Hardcoded Gmail credentials (ONLY FOR TESTING) ---
+EMAIL = "isnamen892@gmail.com"
+PASSWORD = "nameisname123"
+COOKIE_PATH = Path("cookies.json")
 
-from playwright.sync_api import sync_playwright
+# --- Main login logic ---
+async def login_and_save_cookies():
+    logging.info("Launching browser...")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(storage_state=str(COOKIE_PATH) if COOKIE_PATH.exists() else None)
 
-APP = flask.Flask(__name__)
-PLAY = sync_playwright().start()
-BROWSER = PLAY.chromium.launch_persistent_context(
-    user_data_dir="/tmp/playwright",
-    headless=False,
-)
-PAGE = BROWSER.new_page()
+        page = await context.new_page()
+        await page.goto("https://accounts.google.com/signin/v2/identifier", timeout=60000)
 
+        logging.info("Filling email...")
+        await page.fill('input[type="email"]', EMAIL)
+        await page.click('#identifierNext')
+        await page.wait_for_timeout(2000)
 
-def get_input_box():
-    """Get the child textarea of `PromptTextarea__TextareaWrapper`"""
-    return PAGE.query_selector("textarea")
+        logging.info("Filling password...")
+        await page.fill('input[type="password"]', PASSWORD)
+        await page.click('#passwordNext')
 
-def is_logged_in():
-    # See if we have a textarea with data-id="root"
-    return get_input_box() is not None
+        try:
+            await page.wait_for_url("https://myaccount.google.com/*", timeout=15000)
+            logging.info("Login successful!")
+        except Exception as e:
+            logging.warning(f"Login likely failed: {e}")
+            await browser.close()
+            return False
 
-def is_loading_response() -> bool:
-    """See if the send button is diabled, if it does, we're not loading"""
-    return not PAGE.query_selector("textarea ~ button").is_enabled()
+        await context.storage_state(path=str(COOKIE_PATH))
+        await browser.close()
+        logging.info("Cookies saved.")
+        return True
 
-def send_message(message):
-    # Send the message
-    box = get_input_box()
-    box.click()
-    box.fill(message)
-    box.press("Enter")
+# --- Flask route ---
+@app.route("/cookies", methods=["GET"])
+def get_cookies():
+    async def handle():
+        if not COOKIE_PATH.exists():
+            logging.info("No cookies file. Running login...")
+            success = await login_and_save_cookies()
+            if not success:
+                return jsonify({"error": "Login failed"}), 401
 
-def get_last_message():
-    """Get the latest message"""
-    while is_loading_response():
-        time.sleep(0.25)
-    page_elements = PAGE.query_selector_all("div[class*='request-:']")
-    last_element = page_elements.pop()
-    return last_element.inner_text()
+        with open(COOKIE_PATH, "r") as f:
+            cookies = f.read()
+        return jsonify({"cookies": cookies})
 
-def regenerate_response():
-    """Clicks on the Try again button.
-    Returns None if there is no button"""
-    try_again_button = PAGE.query_selector("button:has-text('Try again')")
-    if try_again_button is not None:
-        try_again_button.click()
-    return try_again_button
-
-def get_reset_button():
-    """Returns the reset thread button (it is an a tag not a button)"""
-    return PAGE.query_selector("a:has-text('Reset thread')")
-
-@APP.route("/chat", methods=["GET"]) #TODO: make this a POST
-def chat():
-    message = flask.request.args.get("q")
-    print("Sending message: ", message)
-    send_message(message)
-    response = get_last_message()
-    print("Response: ", response)
-    return response
-
-# create a route for regenerating the response
-@APP.route("/regenerate", methods=["POST"])
-def regenerate():
-    print("Regenerating response")
-    if regenerate_response() is None:
-        return "No response to regenerate"
-    response = get_last_message()
-    print("Response: ", response)
-    return response
-
-@APP.route("/reset", methods=["POST"])
-def reset():
-    print("Resetting chat")
-    get_reset_button().click()
-    return "Chat thread reset"
-
-@APP.route("/restart", methods=["POST"])
-def restart():
-    global PAGE,BROWSER,PLAY
-    PAGE.close()
-    BROWSER.close()
-    PLAY.stop()
-    time.sleep(0.25)
-    PLAY = sync_playwright().start()
-    BROWSER = PLAY.chromium.launch_persistent_context(
-        user_data_dir="/tmp/playwright",
-        headless=False,
-    )
-    PAGE = BROWSER.new_page()
-    PAGE.goto("https://chat.openai.com/")
-    return "API restart!"
-
-
-def start_browser():
-    PAGE.goto("https://chat.openai.com/")
-    if not is_logged_in():
-        print("Please log in to OpenAI Chat")
-        print("Press enter when you're done")
-        input()
-    else:
-        print("Logged in")
-        APP.run(port=5001, threaded=False)
+    return asyncio.run(handle())
 
 if __name__ == "__main__":
-    start_browser()
+    app.run(host="0.0.0.0", port=10000)
