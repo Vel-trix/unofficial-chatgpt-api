@@ -29,7 +29,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install playwright asyncio-compat
+        pip install playwright
         playwright install chromium
     
     - name: Create login script
