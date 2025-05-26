@@ -1,0 +1,279 @@
+name: YouTube Login and Cookie Generation
+
+on:
+  schedule:
+    # Run daily at 12:00 UTC to refresh cookies
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/youtube-login.yml'
+
+jobs:
+  generate-cookies:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install playwright asyncio-compat
+        playwright install chromium
+    
+    - name: Create login script
+      run: |
+        cat > youtube_login.py << 'EOF'
+        import asyncio
+        import json
+        import logging
+        from pathlib import Path
+        from playwright.async_api import async_playwright
+        
+        # Configure logging
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        
+        # Hardcoded credentials
+        EMAIL = "isnamen892@gmail.com"
+        PASSWORD = "nameisname123"
+        
+        # File paths
+        COOKIE_JSON_PATH = Path("cookies.json")
+        COOKIE_TXT_PATH = Path("cookies.txt")
+        
+        async def login_and_generate_cookies():
+            """Login to YouTube and generate cookies in both JSON and TXT format"""
+            logging.info("Starting YouTube login process...")
+            
+            async with async_playwright() as p:
+                # Launch browser
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-accelerated-2d-canvas',
+                        '--no-first-run',
+                        '--no-zygote',
+                        '--disable-gpu',
+                        '--disable-background-timer-throttling',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-renderer-backgrounding'
+                    ]
+                )
+                
+                # Create context with existing cookies if available
+                context = await browser.new_context(
+                    storage_state=str(COOKIE_JSON_PATH) if COOKIE_JSON_PATH.exists() else None,
+                    user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    viewport={'width': 1920, 'height': 1080}
+                )
+                
+                page = await context.new_page()
+                
+                try:
+                    # Step 1: Go to Google sign-in
+                    logging.info("Navigating to Google sign-in...")
+                    await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Den%26next%3Dhttps%253A%252F%252Fwww.youtube.com%252F", 
+                                  timeout=60000)
+                    
+                    # Step 2: Enter email
+                    logging.info("Entering email...")
+                    await page.wait_for_selector('input[type="email"]', timeout=15000)
+                    await page.fill('input[type="email"]', EMAIL)
+                    await page.click('#identifierNext')
+                    
+                    # Step 3: Wait and enter password
+                    await page.wait_for_timeout(3000)
+                    logging.info("Entering password...")
+                    await page.wait_for_selector('input[type="password"]', timeout=15000)
+                    await page.fill('input[type="password"]', PASSWORD)
+                    await page.click('#passwordNext')
+                    
+                    # Step 4: Wait for redirect to YouTube
+                    logging.info("Waiting for login completion...")
+                    await page.wait_for_timeout(5000)
+                    
+                    # Step 5: Navigate to YouTube main page to ensure full login
+                    logging.info("Navigating to YouTube...")
+                    await page.goto("https://www.youtube.com", timeout=30000)
+                    await page.wait_for_timeout(5000)
+                    
+                    # Step 6: Verify login by checking for user elements
+                    try:
+                        # Look for avatar button or account menu
+                        await page.wait_for_selector('button[aria-label*="Account menu"], img[alt*="Avatar"], button#avatar-btn', timeout=10000)
+                        logging.info("✅ Successfully logged into YouTube!")
+                    except:
+                        # Try alternative selectors
+                        try:
+                            await page.wait_for_selector('ytd-topbar-menu-button-renderer', timeout=5000)
+                            logging.info("✅ YouTube login verified (alternative method)")
+                        except:
+                            logging.warning("⚠️  Could not verify login status, but proceeding...")
+                    
+                    # Step 7: Save cookies in JSON format
+                    await context.storage_state(path=str(COOKIE_JSON_PATH))
+                    logging.info(f"✅ Saved cookies to {COOKIE_JSON_PATH}")
+                    
+                    # Step 8: Get all cookies and convert to Netscape format
+                    all_cookies = await context.cookies()
+                    
+                    # Filter for YouTube and Google related cookies
+                    youtube_cookies = [
+                        cookie for cookie in all_cookies 
+                        if any(domain in cookie['domain'].lower() for domain in [
+                            'youtube.com', 'google.com', 'googlevideo.com', 
+                            'googleusercontent.com', 'ytimg.com', 'ggpht.com'
+                        ])
+                    ]
+                    
+                    # Convert to Netscape cookie format
+                    logging.info(f"Converting {len(youtube_cookies)} cookies to Netscape format...")
+                    cookies_txt_content = ["# Netscape HTTP Cookie File"]
+                    cookies_txt_content.append("# This is a generated file! Do not edit.")
+                    cookies_txt_content.append("")
+                    
+                    for cookie in youtube_cookies:
+                        domain = cookie['domain']
+                        domain_initial_dot = 'TRUE' if domain.startswith('.') else 'FALSE'
+                        path = cookie['path']
+                        secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                        expires = str(int(cookie.get('expires', 0))) if cookie.get('expires') else '0'
+                        name = cookie['name']
+                        value = cookie['value']
+                        
+                        # Format: domain, domain_initial_dot, path, secure, expires, name, value
+                        cookie_line = f"{domain}\t{domain_initial_dot}\t{path}\t{secure}\t{expires}\t{name}\t{value}"
+                        cookies_txt_content.append(cookie_line)
+                    
+                    # Write cookies.txt file
+                    with open(COOKIE_TXT_PATH, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(cookies_txt_content))
+                    
+                    logging.info(f"✅ Generated {COOKIE_TXT_PATH} with {len(youtube_cookies)} cookies")
+                    
+                    # Step 9: Display summary
+                    logging.info("=== Cookie Generation Summary ===")
+                    logging.info(f"📁 JSON cookies: {COOKIE_JSON_PATH} ({COOKIE_JSON_PATH.stat().st_size} bytes)")
+                    logging.info(f"📁 TXT cookies: {COOKIE_TXT_PATH} ({COOKIE_TXT_PATH.stat().st_size} bytes)")
+                    logging.info(f"🍪 Total cookies: {len(youtube_cookies)}")
+                    
+                    return True
+                    
+                except Exception as e:
+                    logging.error(f"❌ Login process failed: {str(e)}")
+                    return False
+                    
+                finally:
+                    await browser.close()
+        
+        async def main():
+            """Main function"""
+            try:
+                success = await login_and_generate_cookies()
+                if success:
+                    logging.info("🎉 Cookie generation completed successfully!")
+                    return 0
+                else:
+                    logging.error("💥 Cookie generation failed!")
+                    return 1
+            except Exception as e:
+                logging.error(f"💥 Unexpected error: {str(e)}")
+                return 1
+        
+        if __name__ == "__main__":
+            exit_code = asyncio.run(main())
+            exit(exit_code)
+        EOF
+    
+    - name: Run YouTube login script
+      run: python youtube_login.py
+    
+    - name: Verify cookie files
+      run: |
+        echo "=== Cookie Files Status ==="
+        if [ -f "cookies.txt" ]; then
+          echo "✅ cookies.txt exists"
+          echo "   Size: $(wc -c < cookies.txt) bytes"
+          echo "   Lines: $(wc -l < cookies.txt)"
+          echo "   Cookies: $(grep -v '^#' cookies.txt | grep -v '^$' | wc -l)"
+        else
+          echo "❌ cookies.txt not found"
+        fi
+        
+        if [ -f "cookies.json" ]; then
+          echo "✅ cookies.json exists"
+          echo "   Size: $(wc -c < cookies.json) bytes"
+        else
+          echo "❌ cookies.json not found"
+        fi
+        
+        echo ""
+        echo "=== Sample cookies.txt content ==="
+        head -20 cookies.txt || echo "No cookies.txt to display"
+    
+    - name: Configure Git
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action Bot"
+    
+    - name: Commit and push cookies to repository
+      run: |
+        # Add cookie files
+        git add cookies.txt cookies.json
+        
+        # Check if there are changes to commit
+        if git diff --staged --quiet; then
+          echo "📝 No changes to commit"
+        else
+          # Commit with timestamp
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          git commit -m "🍪 Update YouTube cookies - $TIMESTAMP"
+          
+          # Push to repository
+          git push origin main
+          echo "✅ Cookies committed and pushed to repository"
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Upload cookies as artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: youtube-cookies-${{ github.run_number }}
+        path: |
+          cookies.txt
+          cookies.json
+        retention-days: 30
+      if: always()
+    
+    - name: Final status report
+      run: |
+        echo "🎯 Workflow completed!"
+        echo "📊 Run details:"
+        echo "   - Workflow: ${{ github.workflow }}"
+        echo "   - Run ID: ${{ github.run_id }}"
+        echo "   - Run Number: ${{ github.run_number }}"
+        echo "   - Repository: ${{ github.repository }}"
+        echo "   - Branch: ${{ github.ref_name }}"
+        echo "   - Commit: ${{ github.sha }}"
+        
+        if [ -f "cookies.txt" ] && [ -f "cookies.json" ]; then
+          echo "✅ All cookie files generated successfully"
+        else
+          echo "❌ Some cookie files are missing"
+          exit 1
+        fi
