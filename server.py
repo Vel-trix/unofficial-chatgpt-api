@@ -1,65 +1,46 @@
 from flask import Flask, jsonify
-import asyncio
-import logging
-from pathlib import Path
-from playwright.async_api import async_playwright
+import yt_dlp
+import os
 
-# --- Flask and Logging ---
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
-# --- Hardcoded Gmail credentials (ONLY FOR TESTING) ---
-EMAIL = "isnamen892@gmail.com"
-PASSWORD = "nameisname123"
-COOKIE_PATH = Path("cookies.json")
+@app.route('/aud/<video_id>')
+def get_stream_urls(video_id):
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
 
-# --- Main login logic ---
-async def login_and_save_cookies():
-    logging.info("Launching browser...")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(storage_state=str(COOKIE_PATH) if COOKIE_PATH.exists() else None)
+    ydl_opts = {
+        'quiet': True,
+        'skip_download': True,
+        'extract_flat': False,
+        'forcejson': True,
+        'cookiefile': cookies_path  # Load cookies.txt from root
+    }
 
-        page = await context.new_page()
-        await page.goto("https://accounts.google.com/signin/v2/identifier", timeout=60000)
+    all_formats = []
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            formats = info.get('formats', [])
 
-        logging.info("Filling email...")
-        await page.fill('input[type="email"]', EMAIL)
-        await page.click('#identifierNext')
-        await page.wait_for_timeout(2000)
+            for fmt in formats:
+                if not fmt.get('url'):
+                    continue
+                all_formats.append({
+                    'format_id': fmt.get('format_id'),
+                    'ext': fmt.get('ext'),
+                    'resolution': fmt.get('resolution') or f"{fmt.get('width')}x{fmt.get('height')}",
+                    'fps': fmt.get('fps'),
+                    'vcodec': fmt.get('vcodec'),
+                    'acodec': fmt.get('acodec'),
+                    'filesize': fmt.get('filesize'),
+                    'type': 'audio' if fmt.get('vcodec') == 'none' else ('video' if fmt.get('acodec') == 'none' else 'audio+video'),
+                    'url': fmt.get('url'),
+                })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-        logging.info("Filling password...")
-        await page.fill('input[type="password"]', PASSWORD)
-        await page.click('#passwordNext')
+    return jsonify({'video_id': video_id, 'formats': all_formats})
 
-        try:
-            await page.wait_for_url("https://myaccount.google.com/*", timeout=15000)
-            logging.info("Login successful!")
-        except Exception as e:
-            logging.warning(f"Login likely failed: {e}")
-            await browser.close()
-            return False
-
-        await context.storage_state(path=str(COOKIE_PATH))
-        await browser.close()
-        logging.info("Cookies saved.")
-        return True
-
-# --- Flask route ---
-@app.route("/cookies", methods=["GET"])
-def get_cookies():
-    async def handle():
-        if not COOKIE_PATH.exists():
-            logging.info("No cookies file. Running login...")
-            success = await login_and_save_cookies()
-            if not success:
-                return jsonify({"error": "Login failed"}), 401
-
-        with open(COOKIE_PATH, "r") as f:
-            cookies = f.read()
-        return jsonify({"cookies": cookies})
-
-    return asyncio.run(handle())
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
