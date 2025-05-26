@@ -1,0 +1,12 @@
+# Netscape HTTP Cookie File
+# This is a generated file! Do not edit.
+
+accounts.google.com	FALSE	/	TRUE	1782830502	__Host-GAPS	1:sPBm27awGi3B5TXEtKYFKjZOhhB0Ag:dqdmsU7viVgRVSO2
+accounts.google.com	FALSE	/	TRUE	1750862503	OTZ	8099442_56_56__56_
+.google.com	TRUE	/	TRUE	1764081703	NID	524=LGtsRhqC0f7fq3THk0SUCOeU5aHIp2yB_5BcOr1snpr-SXbWNinFZusqp11r99hTRs6aeTCuNmLxhTpjjvw70labhnqIfZB5uEcnNlLmiTB0r8iNd7HfWpGaEG7K99BhrKoPQsx-jSQyE5VMc9Vxe052pkMtC3_bU-x8sHrrgUmJyZ-fyIPb8IfN8XaD8LdGhho0Bw
+.youtube.com	TRUE	/	TRUE	1748272312	GPS	1
+.youtube.com	TRUE	/	TRUE	-1	YSC	JMN2bAvCfTY
+.youtube.com	TRUE	/	TRUE	1763822512	VISITOR_INFO1_LIVE	snO4ZEk4d-s
+.youtube.com	TRUE	/	TRUE	1763822512	VISITOR_PRIVACY_METADATA	CgJVUxIEGgAgJQ%3D%3D
+.youtube.com	TRUE	/	TRUE	1782830513	PREF	tz=UTC
+.youtube.com	TRUE	/	TRUE	1763822513	__Secure-ROLLOUT_TOKEN	CJzOv97Rl4jVkAEQxvfflq_BjQMY1_Wml6_BjQM%3D
