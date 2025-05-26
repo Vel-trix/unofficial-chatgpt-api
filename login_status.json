@@ -1,0 +1,10 @@
+{
+  "timestamp": "2025-05-26T14:57:11.907216Z",
+  "success": true,
+  "error": null,
+  "verification_details": [
+    "\u2705 Avatar Button: Found button[aria-label*=\"Account menu\"]"
+  ],
+  "cookies_generated": true,
+  "cookie_count": 42
+}
