@@ -47,8 +47,8 @@ jobs:
           logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
           
           # Hardcoded credentials
-          EMAIL = "isnamen892@gmail.com"
-          PASSWORD = "nameisname123"
+          EMAIL = "nmnbhbjjaaaffd@gmail.com"
+          PASSWORD = "password@1234"
           
           # File paths
           COOKIE_JSON_PATH = Path("cookies.json")
