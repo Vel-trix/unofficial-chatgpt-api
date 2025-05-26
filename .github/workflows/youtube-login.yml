@@ -418,107 +418,34 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action Bot"
     
-    - name: Display complete cookies.txt content
-      if: always()
-      run: |
-        echo "🍪 === COMPLETE COOKIES.TXT CONTENT ==="
-        echo "📋 You can copy this entire content:"
-        echo "=================================="
-        if [ -f "cookies.txt" ]; then
-          cat cookies.txt
-        else
-          echo "❌ cookies.txt file not found"
-        fi
-        echo "=================================="
-        echo "🔼 END OF COOKIES.TXT CONTENT"
-        echo ""
-        
-        echo "📄 === COMPLETE COOKIES.JSON CONTENT ==="
-        echo "📋 You can copy this entire content:"
-        echo "=================================="
-        if [ -f "cookies.json" ]; then
-          cat cookies.json
-        else
-          echo "❌ cookies.json file not found"
-        fi
-        echo "=================================="
-        echo "🔼 END OF COOKIES.JSON CONTENT"
-
     - name: Pull latest changes and commit cookies
       run: |
-        echo "🔄 Preparing to handle Git conflicts..."
+        echo "🔄 Pulling latest changes..."
+        git pull origin main --rebase || git pull origin main
         
-        # First, stash any existing changes
-        echo "📦 Stashing existing changes..."
-        git stash push -m "Auto-stash before cookie update" || echo "No changes to stash"
-        
-        # Pull latest changes
-        echo "⬇️  Pulling latest changes..."
-        git pull origin main || {
-          echo "⚠️  Pull failed, trying to resolve..."
-          git fetch origin main
-          git reset --hard origin/main
-        }
-        
-        # Pop stashed changes back (if any)
-        echo "📦 Restoring stashed changes..."
-        git stash pop || echo "No stashed changes to restore"
-        
-        # Now add the new cookie files
-        echo "📁 Adding cookie files..."
+        # Add cookie files
         git add cookies.txt cookies.json login_status.json
         
         # Check if there are changes to commit
         if git diff --staged --quiet; then
           echo "📝 No changes to commit"
         else
-          # Show what we're about to commit
-          echo "📋 Changes to be committed:"
-          git diff --staged --name-only
-          
           # Commit with timestamp
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           git commit -m "🍪 Update YouTube cookies - $TIMESTAMP"
           
-          # Push to repository with enhanced retry logic
+          # Push to repository with retry
           echo "📤 Pushing to repository..."
-          PUSH_SUCCESS=false
-          
-          for i in {1..5}; do
-            echo "🔄 Push attempt $i/5..."
-            
+          for i in {1..3}; do
             if git push origin main; then
               echo "✅ Successfully pushed cookies to repository"
-              PUSH_SUCCESS=true
               break
             else
-              echo "⚠️  Push attempt $i failed"
-              
-              if [ $i -lt 5 ]; then
-                echo "🔄 Retrying in 10 seconds..."
-                sleep 10
-                
-                # Try to resolve conflicts
-                echo "🔧 Attempting to resolve conflicts..."
-                git fetch origin main
-                
-                # If there are conflicts, force our version
-                if ! git rebase origin/main; then
-                  echo "⚠️  Rebase failed, using force strategy..."
-                  git rebase --abort
-                  git reset --hard HEAD~1
-                  git pull origin main
-                  git add cookies.txt cookies.json login_status.json
-                  git commit -m "🍪 Update YouTube cookies - $TIMESTAMP"
-                fi
-              fi
+              echo "⚠️  Push attempt $i failed, retrying in 5 seconds..."
+              sleep 5
+              git pull origin main --rebase || git pull origin main
             fi
           done
-          
-          if [ "$PUSH_SUCCESS" = false ]; then
-            echo "❌ Failed to push after 5 attempts"
-            echo "📋 Cookie files are still available in artifacts for manual download"
-          fi
         fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
