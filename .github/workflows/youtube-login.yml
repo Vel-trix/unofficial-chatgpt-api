@@ -86,7 +86,7 @@ jobs:
             await page.goto('https://www.youtube.com', { waitUntil: 'networkidle2' });
             console.log('Visited YouTube');
 
-            await page.waitForTimeout(10000);
+            await new Promise(resolve => setTimeout(resolve, 10000));
 
             const updatedCookies = await page.cookies();
 
