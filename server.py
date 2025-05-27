@@ -14,7 +14,7 @@ def get_stream_urls(video_id):
         'skip_download': True,
         'extract_flat': False,
         'forcejson': True,
-        'cookiefile': cookies_path  # Load cookies.txt from root
+        'cookiefile': "cookies1.txt"  # Load cookies.txt from root
     }
 
     all_formats = []
