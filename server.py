@@ -1,8 +1,10 @@
 from flask import Flask, jsonify
+from flask_cors import CORS
 import yt_dlp
 import os
 
 app = Flask(__name__)
+CORS(app)  # This enables CORS for all routes and allows all origins
 
 @app.route('/aud/<video_id>')
 def get_stream_urls(video_id):
