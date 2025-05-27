@@ -18,7 +18,7 @@ jobs:
           
       - name: Install Python dependencies
         run: |
-          pip install browsercookie3 requests
+          pip install browser-cookie3 requests pycryptodomex keyring
           
       - name: Install Chrome browser
         run: |
@@ -30,7 +30,7 @@ jobs:
       - name: Create browsercookie refresh script
         run: |
           cat << 'EOF' > refresh-cookies.py
-          import browsercookie3 as browsercookie
+          import browser_cookie3 as browsercookie
           import time
           import requests
           import os
@@ -40,11 +40,28 @@ jobs:
           UPLOAD_URL = "https://file2link-tm3r.onrender.com/upload"
           
           def generate_fresh_cookies():
-              """Generate fresh cookies using browsercookie"""
+              """Generate fresh cookies using browser_cookie3"""
               try:
                   print("Loading cookies from Chrome browser...")
-                  # Load cookies from Chrome
-                  cj = browsercookie.chrome()
+                  # Try Chrome first
+                  try:
+                      cj = browsercookie.chrome()
+                      print("Successfully loaded Chrome cookies")
+                  except Exception as chrome_error:
+                      print(f"Chrome failed: {chrome_error}")
+                      print("Trying Firefox as fallback...")
+                      try:
+                          cj = browsercookie.firefox()
+                          print("Successfully loaded Firefox cookies")
+                      except Exception as firefox_error:
+                          print(f"Firefox failed: {firefox_error}")
+                          print("Trying Edge as fallback...")
+                          try:
+                              cj = browsercookie.edge()
+                              print("Successfully loaded Edge cookies")
+                          except Exception as edge_error:
+                              print(f"All browsers failed. Chrome: {chrome_error}, Firefox: {firefox_error}, Edge: {edge_error}")
+                              return []
                   
                   # Filter for YouTube and Google domains
                   youtube_domains = ['youtube.com', 'google.com', 'accounts.google.com']
@@ -58,7 +75,7 @@ jobs:
                   return youtube_cookies
                   
               except Exception as e:
-                  print(f"Error loading cookies from Chrome: {e}")
+                  print(f"Error loading cookies from browser: {e}")
                   print("Attempting to use existing cookies as fallback...")
                   return []
           
@@ -195,11 +212,20 @@ jobs:
               main()
           EOF
           
-      - name: Run browsercookie refresh script
+      - name: Setup browser environment and run script
         run: |
-          # Set display for Chrome in headless environment
+          # Install additional dependencies for browser cookie access
+          sudo apt-get update
+          sudo apt-get install -y python3-dev libssl-dev libffi-dev
+          
+          # Set up virtual display for any GUI components
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+          
+          # Create a dummy Chrome profile directory structure
+          mkdir -p ~/.config/google-chrome/Default
+          
+          # Run the script
           python refresh-cookies.py
         
       - name: Commit updated cookies1.txt if changed
