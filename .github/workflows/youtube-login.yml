@@ -1,498 +1,114 @@
-name: YouTube Login and Cookie Generation
+name: Refresh YouTube Cookies
 
 on:
   schedule:
-    # Run daily at 12:00 UTC to refresh cookies
-    - cron: '0 12 * * *'
+    - cron: '0 */5 * * *' # every 5 hours
   workflow_dispatch:
-    # Allow manual triggering
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/youtube-login.yml'
 
 jobs:
-  generate-cookies:
+  refresh-cookies:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # Fetch full history to avoid push conflicts
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
+          node-version: '18'
+
       - name: Install dependencies
+        run: npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer
+
+      - name: Create refresh-cookies.js script
         run: |
-          pip install playwright
-          playwright install chromium
-      
-      - name: Create login script
-        run: |
-          cat > youtube_login.py << 'EOF'
-          import asyncio
-          import json
-          import logging
-          import sys
-          from pathlib import Path
-          from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-          
-          # Configure logging
-          logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-          
-          # Hardcoded credentials
-          EMAIL = "nmnbhbjjaaaffd@gmail.com"
-          PASSWORD = "password@123@1"
-          
-          # File paths
-          COOKIE_JSON_PATH = Path("cookies.json")
-          COOKIE_TXT_PATH = Path("cookies.txt")
-          LOGIN_STATUS_PATH = Path("login_status.json")
-          
-          async def verify_youtube_login(page):
-              """Enhanced login verification with multiple methods"""
-              verification_methods = [
-                  # Method 1: Check for avatar/account button
-                  {
-                      'name': 'Avatar Button',
-                      'selectors': ['button[aria-label*="Account menu"]', 'img[alt*="Avatar"]', 'button#avatar-btn'],
-                      'timeout': 10000
-                  },
-                  # Method 2: Check for YouTube topbar menu
-                  {
-                      'name': 'Topbar Menu',
-                      'selectors': ['ytd-topbar-menu-button-renderer', '#avatar-btn'],
-                      'timeout': 5000
-                  },
-                  # Method 3: Check for sign-in button absence (logged in users don't see it)
-                  {
-                      'name': 'No Sign-in Button',
-                      'selectors': ['a[aria-label*="Sign in"]'],
-                      'timeout': 3000,
-                      'should_not_exist': True
-                  },
-                  # Method 4: Check for user-specific elements
-                  {
-                      'name': 'User Elements',
-                      'selectors': ['#guide-section-1', 'ytd-guide-section-renderer'],
-                      'timeout': 5000
-                  }
-              ]
-              
-              login_verified = False
-              verification_details = []
-              
-              for method in verification_methods:
-                  try:
-                      for selector in method['selectors']:
-                          try:
-                              if method.get('should_not_exist'):
-                                  # For elements that should NOT exist when logged in
-                                  try:
-                                      await page.wait_for_selector(selector, timeout=method['timeout'])
-                                      verification_details.append(f"❌ {method['name']}: Found sign-in button (not logged in)")
-                                      break
-                                  except PlaywrightTimeoutError:
-                                      verification_details.append(f"✅ {method['name']}: No sign-in button found (good)")
-                                      login_verified = True
-                                      break
-                              else:
-                                  # For elements that SHOULD exist when logged in
-                                  await page.wait_for_selector(selector, timeout=method['timeout'])
-                                  verification_details.append(f"✅ {method['name']}: Found {selector}")
-                                  login_verified = True
-                                  break
-                          except PlaywrightTimeoutError:
-                              continue
-                      
-                      if login_verified and not method.get('should_not_exist'):
-                          break
-                          
-                  except Exception as e:
-                      verification_details.append(f"⚠️  {method['name']}: Error - {str(e)}")
-              
-              return login_verified, verification_details
-          
-          async def login_and_generate_cookies():
-              """Login to YouTube and generate cookies in both JSON and TXT format"""
-              logging.info("🚀 Starting YouTube login process...")
-              
-              login_status = {
-                  'timestamp': None,
-                  'success': False,
-                  'error': None,
-                  'verification_details': [],
-                  'cookies_generated': False,
-                  'cookie_count': 0
-              }
-              
-              try:
-                  async with async_playwright() as p:
-                      # Launch browser with enhanced options
-                      browser = await p.chromium.launch(
-                          headless=True,
-                          args=[
-                              '--no-sandbox',
-                              '--disable-setuid-sandbox',
-                              '--disable-dev-shm-usage',
-                              '--disable-accelerated-2d-canvas',
-                              '--no-first-run',
-                              '--no-zygote',
-                              '--disable-gpu',
-                              '--disable-background-timer-throttling',
-                              '--disable-backgrounding-occluded-windows',
-                              '--disable-renderer-backgrounding',
-                              '--disable-blink-features=AutomationControlled',
-                              '--disable-features=VizDisplayCompositor'
-                          ]
-                      )
-                      
-                      # Create context with realistic settings
-                      context = await browser.new_context(
-                          storage_state=str(COOKIE_JSON_PATH) if COOKIE_JSON_PATH.exists() else None,
-                          user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                          viewport={'width': 1920, 'height': 1080},
-                          locale='en-US',
-                          timezone_id='America/New_York'
-                      )
-                      
-                      page = await context.new_page()
-                      
-                      try:
-                          # Step 1: Navigate to Google sign-in
-                          logging.info("🌐 Navigating to Google sign-in...")
-                          await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Den%26next%3Dhttps%253A%252F%252Fwww.youtube.com%252F", 
-                                        timeout=60000, wait_until='networkidle')
-                          
-                          # Step 2: Enter email
-                          logging.info("📧 Entering email...")
-                          email_selector = 'input[type="email"]'
-                          await page.wait_for_selector(email_selector, timeout=15000)
-                          await page.fill(email_selector, EMAIL)
-                          await page.click('#identifierNext')
-                          
-                          # Step 3: Wait and enter password
-                          logging.info("⏳ Waiting for password field...")
-                          await page.wait_for_timeout(3000)
-                          
-                          logging.info("🔑 Entering password...")
-                          password_selector = 'input[type="password"]'
-                          await page.wait_for_selector(password_selector, timeout=15000)
-                          await page.fill(password_selector, PASSWORD)
-                          await page.click('#passwordNext')
-                          
-                          # Step 4: Wait for potential 2FA or other challenges
-                          logging.info("⏳ Waiting for login completion...")
-                          await page.wait_for_timeout(8000)  # Increased wait time
-                          
-                          # Check for common error messages
-                          error_selectors = [
-                              '[jsname="B34EJ"] span',  # Wrong password
-                              '.LXRPh',  # Account not found
-                              '[data-error="true"]'  # General error
-                          ]
-                          
-                          for error_selector in error_selectors:
-                              try:
-                                  error_element = await page.wait_for_selector(error_selector, timeout=2000)
-                                  if error_element:
-                                      error_text = await error_element.text_content()
-                                      if error_text and error_text.strip():
-                                          raise Exception(f"Login error: {error_text.strip()}")
-                              except PlaywrightTimeoutError:
-                                  continue
-                          
-                          # Step 5: Navigate to YouTube
-                          logging.info("📺 Navigating to YouTube...")
-                          await page.goto("https://www.youtube.com", timeout=30000, wait_until='networkidle')
-                          await page.wait_for_timeout(5000)
-                          
-                          # Step 6: Enhanced login verification
-                          logging.info("🔍 Verifying login status...")
-                          login_verified, verification_details = await verify_youtube_login(page)
-                          
-                          login_status['verification_details'] = verification_details
-                          
-                          if login_verified:
-                              logging.info("✅ LOGIN SUCCESSFUL! YouTube login verified!")
-                              login_status['success'] = True
-                              
-                              # Step 7: Save cookies in JSON format
-                              await context.storage_state(path=str(COOKIE_JSON_PATH))
-                              logging.info(f"💾 Saved cookies to {COOKIE_JSON_PATH}")
-                              
-                              # Step 8: Get all cookies and convert to Netscape format
-                              all_cookies = await context.cookies()
-                              
-                              # Filter for YouTube and Google related cookies
-                              youtube_cookies = [
-                                  cookie for cookie in all_cookies 
-                                  if any(domain in cookie['domain'].lower() for domain in [
-                                      'youtube.com', 'google.com', 'googlevideo.com', 
-                                      'googleusercontent.com', 'ytimg.com', 'ggpht.com'
-                                  ])
-                              ]
-                              
-                              # Convert to Netscape cookie format
-                              logging.info(f"🍪 Converting {len(youtube_cookies)} cookies to Netscape format...")
-                              cookies_txt_content = ["# Netscape HTTP Cookie File"]
-                              cookies_txt_content.append("# This is a generated file! Do not edit.")
-                              cookies_txt_content.append("")
-                              
-                              for cookie in youtube_cookies:
-                                  domain = cookie['domain']
-                                  domain_initial_dot = 'TRUE' if domain.startswith('.') else 'FALSE'
-                                  path = cookie['path']
-                                  secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
-                                  expires = str(int(cookie.get('expires', 0))) if cookie.get('expires') else '0'
-                                  name = cookie['name']
-                                  value = cookie['value']
-                                  
-                                  # Format: domain, domain_initial_dot, path, secure, expires, name, value
-                                  cookie_line = f"{domain}\t{domain_initial_dot}\t{path}\t{secure}\t{expires}\t{name}\t{value}"
-                                  cookies_txt_content.append(cookie_line)
-                              
-                              # Write cookies.txt file
-                              with open(COOKIE_TXT_PATH, 'w', encoding='utf-8') as f:
-                                  f.write('\n'.join(cookies_txt_content))
-                              
-                              login_status['cookies_generated'] = True
-                              login_status['cookie_count'] = len(youtube_cookies)
-                              
-                              logging.info(f"✅ Generated {COOKIE_TXT_PATH} with {len(youtube_cookies)} cookies")
-                              
-                              # Step 9: Display summary
-                              logging.info("📊 === Cookie Generation Summary ===")
-                              logging.info(f"📁 JSON cookies: {COOKIE_JSON_PATH} ({COOKIE_JSON_PATH.stat().st_size} bytes)")
-                              logging.info(f"📁 TXT cookies: {COOKIE_TXT_PATH} ({COOKIE_TXT_PATH.stat().st_size} bytes)")
-                              logging.info(f"🍪 Total cookies: {len(youtube_cookies)}")
-                              
-                          else:
-                              error_msg = "Login verification failed - could not confirm successful login"
-                              logging.error(f"❌ {error_msg}")
-                              login_status['error'] = error_msg
-                              login_status['success'] = False
-                          
-                          # Log verification details
-                          for detail in verification_details:
-                              logging.info(f"   {detail}")
-                          
-                      except Exception as e:
-                          error_msg = f"Login process failed: {str(e)}"
-                          logging.error(f"❌ {error_msg}")
-                          login_status['error'] = error_msg
-                          login_status['success'] = False
-                          
-                      finally:
-                          # Save login status
-                          from datetime import datetime
-                          login_status['timestamp'] = datetime.utcnow().isoformat() + 'Z'
-                          
-                          with open(LOGIN_STATUS_PATH, 'w', encoding='utf-8') as f:
-                              json.dump(login_status, f, indent=2)
-                          
-                          await browser.close()
-                      
-                      return login_status['success']
-                      
-              except Exception as e:
-                  error_msg = f"Unexpected error in login process: {str(e)}"
-                  logging.error(f"💥 {error_msg}")
-                  login_status['error'] = error_msg
-                  login_status['success'] = False
-                  
-                  # Save error status
-                  from datetime import datetime
-                  login_status['timestamp'] = datetime.utcnow().isoformat() + 'Z'
-                  
-                  with open(LOGIN_STATUS_PATH, 'w', encoding='utf-8') as f:
-                      json.dump(login_status, f, indent=2)
-                  
-                  return False
-          
-          async def main():
-              """Main function"""
-              try:
-                  success = await login_and_generate_cookies()
-                  
-                  if success:
-                      logging.info("🎉 COOKIE GENERATION COMPLETED SUCCESSFULLY!")
-                      print("::notice title=Login Status::✅ YouTube login and cookie generation successful!")
-                      return 0
-                  else:
-                      logging.error("💥 COOKIE GENERATION FAILED!")
-                      print("::error title=Login Status::❌ YouTube login or cookie generation failed!")
-                      
-                      # Read and display error details
-                      if LOGIN_STATUS_PATH.exists():
-                          with open(LOGIN_STATUS_PATH, 'r') as f:
-                              status = json.load(f)
-                              if status.get('error'):
-                                  print(f"::error title=Error Details::{status['error']}")
-                      
-                      return 1
-                      
-              except Exception as e:
-                  error_msg = f"Unexpected error in main: {str(e)}"
-                  logging.error(f"💥 {error_msg}")
-                  print(f"::error title=Critical Error::{error_msg}")
-                  return 1
-          
-          if __name__ == "__main__":
-              exit_code = asyncio.run(main())
-              sys.exit(exit_code)
+          cat << 'EOF' > refresh-cookies.js
+          const puppeteer = require('puppeteer-extra');
+          const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+          const fs = require('fs');
+          const path = require('path');
+
+          puppeteer.use(StealthPlugin());
+
+          const INPUT_COOKIES_PATH = path.resolve('./cookies.txt');
+          const OUTPUT_COOKIES_PATH = path.resolve('./cookies1.txt');
+
+          function parseCookiesTxt(content) {
+            const lines = content.split('\n').filter(line => line && !line.startsWith('#'));
+            return lines.map(line => {
+              const [domain, flag, path, secure, expiration, name, value] = line.split('\t');
+              return {
+                domain,
+                name,
+                value,
+                path,
+                secure: secure.toLowerCase() === 'true' || secure === '1',
+                expires: Number(expiration),
+                httpOnly: false,
+                sameSite: 'Lax',
+              };
+            });
+          }
+
+          function serializeCookies(cookies) {
+            return cookies.map(cookie => {
+              return [
+                cookie.domain.startsWith('.') ? cookie.domain : '.' + cookie.domain,
+                'TRUE',
+                cookie.path,
+                cookie.secure ? 'TRUE' : 'FALSE',
+                cookie.expires ? cookie.expires : 0,
+                cookie.name,
+                cookie.value,
+              ].join('\t');
+            }).join('\n');
+          }
+
+          (async () => {
+            if (!fs.existsSync(INPUT_COOKIES_PATH)) {
+              console.error('Input cookies.txt file not found!');
+              process.exit(1);
+            }
+
+            const browser = await puppeteer.launch({
+              headless: true,
+              args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            });
+
+            const page = await browser.newPage();
+
+            const txt = fs.readFileSync(INPUT_COOKIES_PATH, 'utf-8');
+            const cookies = parseCookiesTxt(txt);
+            await page.setCookie(...cookies);
+            console.log(`Loaded ${cookies.length} cookies from cookies.txt`);
+
+            await page.goto('https://www.youtube.com', { waitUntil: 'networkidle2' });
+            console.log('Visited YouTube');
+
+            await page.waitForTimeout(10000);
+
+            const updatedCookies = await page.cookies();
+
+            const serialized = serializeCookies(updatedCookies);
+            fs.writeFileSync(OUTPUT_COOKIES_PATH, serialized, 'utf-8');
+            console.log(`Saved updated cookies to ${OUTPUT_COOKIES_PATH}`);
+
+            await browser.close();
+          })();
           EOF
-      
-      - name: Run YouTube login script
-        id: login
+
+      - name: Run Puppeteer cookie refresh script
+        run: node ./refresh-cookies.js
+
+      - name: Commit updated cookies1.txt if changed
         run: |
-          echo "🚀 Starting YouTube login process..."
-          python youtube_login.py
-          echo "login_exit_code=$?" >> $GITHUB_OUTPUT
-      
-      - name: Check login status
-        run: |
-          echo "=== LOGIN STATUS REPORT ==="
-          
-          if [ -f "login_status.json" ]; then
-            echo "📄 Login status file found:"
-            cat login_status.json | jq '.' || cat login_status.json
-            echo ""
-            
-            # Extract success status
-            SUCCESS=$(cat login_status.json | jq -r '.success // false')
-            ERROR=$(cat login_status.json | jq -r '.error // "No error details"')
-            COOKIE_COUNT=$(cat login_status.json | jq -r '.cookie_count // 0')
-            
-            if [ "$SUCCESS" = "true" ]; then
-              echo "✅ LOGIN STATUS: SUCCESSFUL"
-              echo "🍪 Generated $COOKIE_COUNT cookies"
-              echo "::notice title=Login Success::YouTube login successful with $COOKIE_COUNT cookies generated"
-            else
-              echo "❌ LOGIN STATUS: FAILED"
-              echo "💥 Error: $ERROR"
-              echo "::error title=Login Failed::$ERROR"
-            fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cookies1.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Refresh cookies1.txt on $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            git push
           else
-            echo "❌ LOGIN STATUS: UNKNOWN (no status file)"
-            echo "::error title=Login Status::No login status file generated"
-          fi
-      
-      - name: Verify cookie files
-        if: always()
-        run: |
-          echo "=== COOKIE FILES STATUS ==="
-          
-          if [ -f "cookies.txt" ]; then
-            echo "✅ cookies.txt exists"
-            echo "   Size: $(wc -c < cookies.txt) bytes"
-            echo "   Lines: $(wc -l < cookies.txt)"
-            echo "   Cookies: $(grep -v '^#' cookies.txt | grep -v '^$' | wc -l)"
-          else
-            echo "❌ cookies.txt not found"
-          fi
-          
-          if [ -f "cookies.json" ]; then
-            echo "✅ cookies.json exists"
-            echo "   Size: $(wc -c < cookies.json) bytes"
-          else
-            echo "❌ cookies.json not found"
-          fi
-          
-          echo ""
-          echo "=== SAMPLE COOKIES.TXT CONTENT ==="
-          if [ -f "cookies.txt" ]; then
-            head -20 cookies.txt
-          else
-            echo "No cookies.txt to display"
-          fi
-      
-      - name: Configure Git
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action Bot"
-      
-      - name: Pull latest changes and commit cookies
-        run: |
-          echo "🔄 Pulling latest changes..."
-          git pull origin main --rebase || git pull origin main
-          
-          # Add cookie files
-          git add cookies.txt cookies.json login_status.json
-          
-          # Check if there are changes to commit
-          if git diff --staged --quiet; then
-            echo "📝 No changes to commit"
-          else
-            # Commit with timestamp
-            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-            git commit -m "🍪 Update YouTube cookies - $TIMESTAMP"
-            
-            # Push to repository with retry
-            echo "📤 Pushing to repository..."
-            for i in {1..3}; do
-              if git push origin main; then
-                echo "✅ Successfully pushed cookies to repository"
-                break
-              else
-                echo "⚠️  Push attempt $i failed, retrying in 5 seconds..."
-                sleep 5
-                git pull origin main --rebase || git pull origin main
-              fi
-            done
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Upload cookies as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: youtube-cookies-${{ github.run_number }}
-          path: |
-            cookies.txt
-            cookies.json
-            login_status.json
-          retention-days: 30
-        if: always()
-      
-      - name: Final status report
-        if: always()
-        run: |
-          echo "🎯 === WORKFLOW COMPLETION REPORT ==="
-          echo "📊 Run details:"
-          echo "   - Workflow: ${{ github.workflow }}"
-          echo "   - Run ID: ${{ github.run_id }}"
-          echo "   - Run Number: ${{ github.run_number }}"
-          echo "   - Repository: ${{ github.repository }}"
-          echo "   - Branch: ${{ github.ref_name }}"
-          echo "   - Commit: ${{ github.sha }}"
-          echo ""
-          
-          # Check final status
-          if [ -f "login_status.json" ]; then
-            SUCCESS=$(cat login_status.json | jq -r '.success // false')
-            if [ "$SUCCESS" = "true" ]; then
-              echo "🎉 OVERALL STATUS: SUCCESS"
-              echo "✅ Login successful"
-              echo "✅ Cookies generated"
-              if [ -f "cookies.txt" ] && [ -f "cookies.json" ]; then
-                echo "✅ All cookie files present"
-              else
-                echo "⚠️  Some cookie files missing"
-              fi
-            else
-              echo "💥 OVERALL STATUS: FAILED"
-              echo "❌ Login or cookie generation failed"
-              exit 1
-            fi
-          else
-            echo "💥 OVERALL STATUS: UNKNOWN"
-            echo "❌ No status information available"
-            exit 1
+            echo "No changes in cookies1.txt to commit."
           fi
