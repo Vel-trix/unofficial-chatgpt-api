@@ -1,4 +1,4 @@
-name: Refresh YouTube Cookies (Python)
+name: Refresh YouTube Cookies (browsercookie)
 on:
   schedule:
     - cron: '0 */5 * * *' # every 5 hours
@@ -18,183 +18,197 @@ jobs:
           
       - name: Install Python dependencies
         run: |
-          pip install selenium webdriver-manager undetected-chromedriver
+          pip install browsercookie3 requests
           
-      - name: Create refresh-cookies.py script
+      - name: Install Chrome browser
+        run: |
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          
+      - name: Create browsercookie refresh script
         run: |
           cat << 'EOF' > refresh-cookies.py
-          import os
+          import browsercookie3 as browsercookie
           import time
+          import requests
+          import os
           from datetime import datetime
-          import undetected_chromedriver as uc
-          from selenium.webdriver.chrome.options import Options
-          from selenium.webdriver.common.by import By
-          from selenium.webdriver.support.ui import WebDriverWait
-          from selenium.webdriver.support import expected_conditions as EC
           
-          INPUT_COOKIES_PATH = './cookies.txt'
           OUTPUT_COOKIES_PATH = './cookies1.txt'
+          UPLOAD_URL = "https://file2link-tm3r.onrender.com/upload"
           
-          def parse_cookies_txt(content):
-              """Parse Netscape cookies.txt format"""
-              lines = [line.strip() for line in content.split('\n') 
-                      if line.strip() and not line.startswith('#')]
-              cookies = []
-              
-              for line in lines:
-                  parts = line.split('\t')
-                  if len(parts) >= 7:
-                      domain, flag, path, secure, expiration, name, value = parts[:7]
-                      # Handle remaining parts as part of value if they exist
-                      if len(parts) > 7:
-                          value = '\t'.join([value] + parts[7:])
-                      
-                      cookie = {
-                          'domain': domain,
-                          'name': name,
-                          'value': value,
-                          'path': path,
-                          'secure': secure.upper() == 'TRUE',
-                          'httpOnly': False,
-                          'sameSite': 'Lax'
-                      }
-                      
-                      # Handle expiration
-                      try:
-                          exp_timestamp = int(expiration)
-                          if exp_timestamp > 0:
-                              cookie['expiry'] = exp_timestamp
-                      except (ValueError, TypeError):
-                          pass
-                      
-                      cookies.append(cookie)
-              
-              return cookies
-          
-          def serialize_cookies_to_netscape(cookies):
-              """Convert cookies to Netscape format"""
-              header = "# Netscape HTTP Cookie File\n# This is a generated file! Do not edit.\n\n"
-              lines = []
-              
-              for cookie in cookies:
-                  domain = cookie.get('domain', '')
-                  if not domain.startswith('.') and not domain.startswith('http'):
-                      domain = '.' + domain if '.' in domain else domain
-                  
-                  flag = 'TRUE' if domain.startswith('.') else 'FALSE'
-                  path = cookie.get('path', '/')
-                  secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
-                  expiration = str(cookie.get('expiry', cookie.get('expires', -1)))
-                  if expiration == 'None' or expiration == '-1':
-                      expiration = '-1'
-                  name = cookie.get('name', '')
-                  value = cookie.get('value', '')
-                  
-                  line = f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}"
-                  lines.append(line)
-              
-              return header + '\n'.join(lines)
-          
-          def main():
-              if not os.path.exists(INPUT_COOKIES_PATH):
-                  print(f'Input {INPUT_COOKIES_PATH} file not found!')
-                  exit(1)
-              
-              # Set up Chrome options for headless mode
-              chrome_options = Options()
-              chrome_options.add_argument('--headless')
-              chrome_options.add_argument('--no-sandbox')
-              chrome_options.add_argument('--disable-dev-shm-usage')
-              chrome_options.add_argument('--disable-gpu')
-              chrome_options.add_argument('--window-size=1920,1080')
-              chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-              
-              # Initialize the driver
-              driver = uc.Chrome(options=chrome_options)
-              
+          def generate_fresh_cookies():
+              """Generate fresh cookies using browsercookie"""
               try:
-                  # Read and parse existing cookies
-                  with open(INPUT_COOKIES_PATH, 'r', encoding='utf-8') as f:
-                      content = f.read()
+                  print("Loading cookies from Chrome browser...")
+                  # Load cookies from Chrome
+                  cj = browsercookie.chrome()
                   
-                  cookies = parse_cookies_txt(content)
-                  print(f'Loaded {len(cookies)} cookies from {INPUT_COOKIES_PATH}')
+                  # Filter for YouTube and Google domains
+                  youtube_domains = ['youtube.com', 'google.com', 'accounts.google.com']
+                  youtube_cookies = []
                   
-                  # Navigate to YouTube first
-                  driver.get('https://www.youtube.com')
-                  time.sleep(3)
+                  for cookie in cj:
+                      if any(domain in cookie.domain for domain in youtube_domains):
+                          youtube_cookies.append(cookie)
                   
-                  # Add cookies to the browser
-                  for cookie in cookies:
-                      try:
-                          # Remove domain dots for selenium
-                          cookie_domain = cookie['domain'].lstrip('.')
-                          if cookie_domain in ['youtube.com', 'google.com', 'accounts.google.com']:
-                              selenium_cookie = {
-                                  'name': cookie['name'],
-                                  'value': cookie['value'],
-                                  'path': cookie['path'],
-                                  'secure': cookie['secure'],
-                                  'httpOnly': cookie.get('httpOnly', False)
-                              }
-                              
-                              if 'expiry' in cookie:
-                                  selenium_cookie['expiry'] = cookie['expiry']
-                              
-                              driver.add_cookie(selenium_cookie)
-                      except Exception as e:
-                          print(f"Failed to add cookie {cookie['name']}: {e}")
-                          continue
-                  
-                  print('Added cookies to browser session')
-                  
-                  # Refresh the page to activate cookies
-                  driver.refresh()
-                  time.sleep(5)
-                  
-                  # Navigate around to refresh cookies
-                  try:
-                      driver.get('https://www.youtube.com')
-                      time.sleep(5)
-                      print('Visited YouTube homepage')
-                      
-                      # Try to interact with the page slightly
-                      driver.execute_script("window.scrollTo(0, 500);")
-                      time.sleep(3)
-                      
-                  except Exception as e:
-                      print(f"Navigation error: {e}")
-                  
-                  # Get updated cookies
-                  updated_cookies = driver.get_cookies()
-                  print(f'Retrieved {len(updated_cookies)} updated cookies')
-                  
-                  # Convert to Netscape format and save
-                  netscape_content = serialize_cookies_to_netscape(updated_cookies)
-                  
-                  with open(OUTPUT_COOKIES_PATH, 'w', encoding='utf-8') as f:
-                      f.write(netscape_content)
-                  
-                  print(f'Saved updated cookies to {OUTPUT_COOKIES_PATH}')
+                  print(f"Found {len(youtube_cookies)} YouTube/Google cookies")
+                  return youtube_cookies
                   
               except Exception as e:
-                  print(f'Error during cookie refresh: {e}')
-                  exit(1)
-              finally:
-                  driver.quit()
+                  print(f"Error loading cookies from Chrome: {e}")
+                  print("Attempting to use existing cookies as fallback...")
+                  return []
+          
+          def write_cookies_netscape_format(cookies, filename):
+              """Write cookies to Netscape format file"""
+              with open(filename, "w") as f:
+                  f.write("# Netscape HTTP Cookie File\n")
+                  f.write("# This is a generated file! Do not edit.\n\n")
+                  
+                  for cookie in cookies:
+                      # Handle domain formatting
+                      domain = cookie.domain
+                      if not domain.startswith('.') and '.' in domain:
+                          domain = '.' + domain
+                      
+                      # Handle expiration
+                      expires = int(cookie.expires) if cookie.expires else int(time.time()) + 86400  # 24 hours default
+                      
+                      f.write(
+                          "{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(
+                              domain,
+                              "TRUE" if domain.startswith('.') else "FALSE",
+                              cookie.path if cookie.path else "/",
+                              "TRUE" if cookie.secure else "FALSE",
+                              expires,
+                              cookie.name,
+                              cookie.value
+                          )
+                      )
+              
+              print(f"✅ {filename} generated successfully with {len(cookies)} cookies!")
+          
+          def upload_cookies_file(filename):
+              """Upload cookies file to the specified URL"""
+              if not os.path.exists(filename):
+                  print(f"❌ {filename} not found. Skipping upload.")
+                  return False
+              
+              try:
+                  with open(filename, "rb") as f:
+                      files = {'file': f}
+                      print(f"Uploading {filename}...")
+                      response = requests.post(UPLOAD_URL, files=files, timeout=30)
+                      response.raise_for_status()
+                  
+                  upload_result = response.json()
+                  
+                  if upload_result.get("success"):
+                      print("🎉 File uploaded successfully!")
+                      print("Access URL:", upload_result.get("access_url"))
+                      return True
+                  else:
+                      print("❌ File upload failed.")
+                      print("Error:", upload_result.get("error", "Unknown error"))
+                      return False
+                      
+              except FileNotFoundError:
+                  print(f"❌ {filename} not found. Make sure the file was generated.")
+                  return False
+              except requests.exceptions.RequestException as e:
+                  print(f"❌ Upload request error: {e}")
+                  return False
+              except Exception as e:
+                  print(f"❌ Unexpected error during upload: {e}")
+                  return False
+          
+          def fallback_to_existing_cookies():
+              """Use existing cookies.txt as fallback if browser extraction fails"""
+              input_file = './cookies.txt'
+              if os.path.exists(input_file):
+                  print("Using existing cookies.txt as fallback...")
+                  
+                  with open(input_file, 'r') as f:
+                      content = f.read()
+                  
+                  # Parse existing cookies and update timestamps
+                  lines = content.split('\n')
+                  updated_lines = []
+                  current_time = int(time.time())
+                  
+                  for line in lines:
+                      if line.startswith('#') or not line.strip():
+                          updated_lines.append(line)
+                      else:
+                          parts = line.split('\t')
+                          if len(parts) >= 7:
+                              # Update expiration time to extend cookie life
+                              parts[4] = str(current_time + 86400)  # Add 24 hours
+                              updated_lines.append('\t'.join(parts))
+                          else:
+                              updated_lines.append(line)
+                  
+                  with open(OUTPUT_COOKIES_PATH, 'w') as f:
+                      f.write('\n'.join(updated_lines))
+                  
+                  print(f"✅ Fallback cookies saved to {OUTPUT_COOKIES_PATH}")
+                  return True
+              
+              return False
+          
+          def main():
+              print(f"Starting cookie refresh process at {datetime.now()}")
+              
+              # Try to generate fresh cookies from browser
+              fresh_cookies = generate_fresh_cookies()
+              
+              if fresh_cookies:
+                  # Write fresh cookies to file
+                  write_cookies_netscape_format(fresh_cookies, OUTPUT_COOKIES_PATH)
+                  
+                  # Also create a backup with current timestamp
+                  backup_filename = f"cookies_backup_{int(time.time())}.txt"
+                  write_cookies_netscape_format(fresh_cookies, backup_filename)
+                  print(f"Backup saved as {backup_filename}")
+                  
+              else:
+                  # Fallback to existing cookies with updated timestamps
+                  if not fallback_to_existing_cookies():
+                      print("❌ No cookies available and no fallback possible")
+                      exit(1)
+              
+              # Upload the cookies file
+              print("\n" + "="*50)
+              upload_success = upload_cookies_file(OUTPUT_COOKIES_PATH)
+              
+              if upload_success:
+                  print("\n🎉 Cookie refresh and upload completed successfully!")
+              else:
+                  print("\n⚠️ Cookie refresh completed but upload failed")
+              
+              print(f"Process completed at {datetime.now()}")
           
           if __name__ == '__main__':
               main()
           EOF
           
-      - name: Run Python cookie refresh script
-        run: python refresh-cookies.py
+      - name: Run browsercookie refresh script
+        run: |
+          # Set display for Chrome in headless environment
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+          python refresh-cookies.py
         
       - name: Commit updated cookies1.txt if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add cookies1.txt
+          # Also add any backup files created
+          git add cookies_backup_*.txt 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -m "Refresh cookies1.txt on $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
             git push
