@@ -1,5 +1,4 @@
-name: Refresh YouTube Cookies
-
+name: Refresh YouTube Cookies (Python)
 on:
   schedule:
     - cron: '0 */5 * * *' # every 5 hours
@@ -8,99 +7,189 @@ on:
 jobs:
   refresh-cookies:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          node-version: '18'
-
-      - name: Install dependencies
-        run: npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer
-
-      - name: Create refresh-cookies.js script
+          python-version: '3.10'
+          
+      - name: Install Python dependencies
         run: |
-          cat << 'EOF' > refresh-cookies.js
-          const puppeteer = require('puppeteer-extra');
-          const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-          const fs = require('fs');
-          const path = require('path');
-
-          puppeteer.use(StealthPlugin());
-
-          const INPUT_COOKIES_PATH = path.resolve('./cookies.txt');
-          const OUTPUT_COOKIES_PATH = path.resolve('./cookies1.txt');
-
-          function parseCookiesTxt(content) {
-            const lines = content.split('\n').filter(line => line && !line.startsWith('#'));
-            return lines.map(line => {
-              const [domain, flag, path, secure, expiration, name, value] = line.split('\t');
-              return {
-                domain,
-                name,
-                value,
-                path,
-                secure: secure.toLowerCase() === 'true' || secure === '1',
-                expires: Number(expiration),
-                httpOnly: false,
-                sameSite: 'Lax',
-              };
-            });
-          }
-
-          function serializeCookies(cookies) {
-            return cookies.map(cookie => {
-              return [
-                cookie.domain.startsWith('.') ? cookie.domain : '.' + cookie.domain,
-                'TRUE',
-                cookie.path,
-                cookie.secure ? 'TRUE' : 'FALSE',
-                cookie.expires ? cookie.expires : 0,
-                cookie.name,
-                cookie.value,
-              ].join('\t');
-            }).join('\n');
-          }
-
-          (async () => {
-            if (!fs.existsSync(INPUT_COOKIES_PATH)) {
-              console.error('Input cookies.txt file not found!');
-              process.exit(1);
-            }
-
-            const browser = await puppeteer.launch({
-              headless: true,
-              args: ['--no-sandbox', '--disable-setuid-sandbox'],
-            });
-
-            const page = await browser.newPage();
-
-            const txt = fs.readFileSync(INPUT_COOKIES_PATH, 'utf-8');
-            const cookies = parseCookiesTxt(txt);
-            await page.setCookie(...cookies);
-            console.log(`Loaded ${cookies.length} cookies from cookies.txt`);
-
-            await page.goto('https://www.youtube.com', { waitUntil: 'networkidle2' });
-            console.log('Visited YouTube');
-
-            await new Promise(resolve => setTimeout(resolve, 10000));
-
-            const updatedCookies = await page.cookies();
-
-            const serialized = serializeCookies(updatedCookies);
-            fs.writeFileSync(OUTPUT_COOKIES_PATH, serialized, 'utf-8');
-            console.log(`Saved updated cookies to ${OUTPUT_COOKIES_PATH}`);
-
-            await browser.close();
-          })();
+          pip install selenium webdriver-manager undetected-chromedriver
+          
+      - name: Create refresh-cookies.py script
+        run: |
+          cat << 'EOF' > refresh-cookies.py
+          import os
+          import time
+          from datetime import datetime
+          import undetected_chromedriver as uc
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+          
+          INPUT_COOKIES_PATH = './cookies.txt'
+          OUTPUT_COOKIES_PATH = './cookies1.txt'
+          
+          def parse_cookies_txt(content):
+              """Parse Netscape cookies.txt format"""
+              lines = [line.strip() for line in content.split('\n') 
+                      if line.strip() and not line.startswith('#')]
+              cookies = []
+              
+              for line in lines:
+                  parts = line.split('\t')
+                  if len(parts) >= 7:
+                      domain, flag, path, secure, expiration, name, value = parts[:7]
+                      # Handle remaining parts as part of value if they exist
+                      if len(parts) > 7:
+                          value = '\t'.join([value] + parts[7:])
+                      
+                      cookie = {
+                          'domain': domain,
+                          'name': name,
+                          'value': value,
+                          'path': path,
+                          'secure': secure.upper() == 'TRUE',
+                          'httpOnly': False,
+                          'sameSite': 'Lax'
+                      }
+                      
+                      # Handle expiration
+                      try:
+                          exp_timestamp = int(expiration)
+                          if exp_timestamp > 0:
+                              cookie['expiry'] = exp_timestamp
+                      except (ValueError, TypeError):
+                          pass
+                      
+                      cookies.append(cookie)
+              
+              return cookies
+          
+          def serialize_cookies_to_netscape(cookies):
+              """Convert cookies to Netscape format"""
+              header = "# Netscape HTTP Cookie File\n# This is a generated file! Do not edit.\n\n"
+              lines = []
+              
+              for cookie in cookies:
+                  domain = cookie.get('domain', '')
+                  if not domain.startswith('.') and not domain.startswith('http'):
+                      domain = '.' + domain if '.' in domain else domain
+                  
+                  flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+                  path = cookie.get('path', '/')
+                  secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                  expiration = str(cookie.get('expiry', cookie.get('expires', -1)))
+                  if expiration == 'None' or expiration == '-1':
+                      expiration = '-1'
+                  name = cookie.get('name', '')
+                  value = cookie.get('value', '')
+                  
+                  line = f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}"
+                  lines.append(line)
+              
+              return header + '\n'.join(lines)
+          
+          def main():
+              if not os.path.exists(INPUT_COOKIES_PATH):
+                  print(f'Input {INPUT_COOKIES_PATH} file not found!')
+                  exit(1)
+              
+              # Set up Chrome options for headless mode
+              chrome_options = Options()
+              chrome_options.add_argument('--headless')
+              chrome_options.add_argument('--no-sandbox')
+              chrome_options.add_argument('--disable-dev-shm-usage')
+              chrome_options.add_argument('--disable-gpu')
+              chrome_options.add_argument('--window-size=1920,1080')
+              chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+              
+              # Initialize the driver
+              driver = uc.Chrome(options=chrome_options)
+              
+              try:
+                  # Read and parse existing cookies
+                  with open(INPUT_COOKIES_PATH, 'r', encoding='utf-8') as f:
+                      content = f.read()
+                  
+                  cookies = parse_cookies_txt(content)
+                  print(f'Loaded {len(cookies)} cookies from {INPUT_COOKIES_PATH}')
+                  
+                  # Navigate to YouTube first
+                  driver.get('https://www.youtube.com')
+                  time.sleep(3)
+                  
+                  # Add cookies to the browser
+                  for cookie in cookies:
+                      try:
+                          # Remove domain dots for selenium
+                          cookie_domain = cookie['domain'].lstrip('.')
+                          if cookie_domain in ['youtube.com', 'google.com', 'accounts.google.com']:
+                              selenium_cookie = {
+                                  'name': cookie['name'],
+                                  'value': cookie['value'],
+                                  'path': cookie['path'],
+                                  'secure': cookie['secure'],
+                                  'httpOnly': cookie.get('httpOnly', False)
+                              }
+                              
+                              if 'expiry' in cookie:
+                                  selenium_cookie['expiry'] = cookie['expiry']
+                              
+                              driver.add_cookie(selenium_cookie)
+                      except Exception as e:
+                          print(f"Failed to add cookie {cookie['name']}: {e}")
+                          continue
+                  
+                  print('Added cookies to browser session')
+                  
+                  # Refresh the page to activate cookies
+                  driver.refresh()
+                  time.sleep(5)
+                  
+                  # Navigate around to refresh cookies
+                  try:
+                      driver.get('https://www.youtube.com')
+                      time.sleep(5)
+                      print('Visited YouTube homepage')
+                      
+                      # Try to interact with the page slightly
+                      driver.execute_script("window.scrollTo(0, 500);")
+                      time.sleep(3)
+                      
+                  except Exception as e:
+                      print(f"Navigation error: {e}")
+                  
+                  # Get updated cookies
+                  updated_cookies = driver.get_cookies()
+                  print(f'Retrieved {len(updated_cookies)} updated cookies')
+                  
+                  # Convert to Netscape format and save
+                  netscape_content = serialize_cookies_to_netscape(updated_cookies)
+                  
+                  with open(OUTPUT_COOKIES_PATH, 'w', encoding='utf-8') as f:
+                      f.write(netscape_content)
+                  
+                  print(f'Saved updated cookies to {OUTPUT_COOKIES_PATH}')
+                  
+              except Exception as e:
+                  print(f'Error during cookie refresh: {e}')
+                  exit(1)
+              finally:
+                  driver.quit()
+          
+          if __name__ == '__main__':
+              main()
           EOF
-
-      - name: Run Puppeteer cookie refresh script
-        run: node ./refresh-cookies.js
-
+          
+      - name: Run Python cookie refresh script
+        run: python refresh-cookies.py
+        
       - name: Commit updated cookies1.txt if changed
         run: |
           git config user.name "github-actions[bot]"
